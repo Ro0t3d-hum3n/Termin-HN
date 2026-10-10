@@ -1,0 +1,41 @@
+name: Heilbronn appointment monitor
+
+on:
+  schedule:
+    # GitHub Actions schedules have a five-minute minimum and may be delayed.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HBN_LOOKAHEAD: "180"
+      HBN_REALERT_HOURS: "6"
+      HBN_TG_TOKEN: ${{ secrets.HBN_TG_TOKEN }}
+      HBN_TG_CHAT: ${{ secrets.HBN_TG_CHAT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restore alert state
+        uses: actions/cache/restore@v4
+        with:
+          path: state.json
+          key: monitor-state-${{ github.run_id }}
+          restore-keys: |
+            monitor-state-
+      - name: Check for slots
+        run: python3 heilbronn_monitor.py --once
+      - name: Save alert state
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: state.json
+          key: monitor-state-${{ github.run_id }}

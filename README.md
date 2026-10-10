@@ -64,6 +64,22 @@ HBN_LOOKAHEAD=180     # days ahead to query
 HBN_REALERT_HOURS=6   # repeat an alert if a slot stays available this long
 ```
 
+## Run on GitHub Actions (no personal server)
+
+The included workflow runs the monitor every five minutes. GitHub may delay
+scheduled runs, so it is less immediate than the local 60-second daemon.
+
+1. In the repository, open **Settings → Secrets and variables → Actions**.
+2. Add repository secrets named `HBN_TG_TOKEN` and `HBN_TG_CHAT` with your bot
+   token and chat ID. Do not add either value to this README or source code.
+3. Open **Actions → Heilbronn appointment monitor** and enable the workflow if
+   prompted. Use **Run workflow** for a manual check.
+
+GitHub Actions stores alert state between runs so an available slot does not
+trigger a message every five minutes. Scheduled workflows can be paused by
+GitHub after long periods without repository activity, so check the Actions
+page occasionally.
+
 The eTermin API used here is the public booking page's availability interface,
 not the authenticated account management API. The page or interface may
 change; if the monitor logs errors, check its service list and booking page.
