@@ -10,10 +10,12 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 BASE = "https://www.etermin.net"
 WEBID = "qtermin-stadtheilbronn-abh"
 BOOKING_URL = f"{BASE}/{WEBID}"
+HEILBRONN_TZ = ZoneInfo("Europe/Berlin")
 SERVICES = {
     170652: ("Abholung Aufenthaltserlaubnis", 5),
     144512: ("Verlängerung Aufenthaltserlaubnis", 20),
@@ -65,13 +67,13 @@ def calendars(service_id):
 
 def open_days(service_id, calendar_id):
     data = get_json("/api/timeslots", {
-        "date": dt.date.today().isoformat(), "serviceid": service_id,
+        "date": heilbronn_today().isoformat(), "serviceid": service_id,
         "rangesearch": 1, "caching": "false", "capacity": "",
         "duration": SERVICES[service_id][1], "cluster": "false", "slottype": 0,
         "fillcalendarstrategy": 0, "showavcap": "true", "appfuture": LOOKAHEAD,
         "appdeadline": 0, "appdeadlinewm": 0, "msdcm": 0, "calendarid": calendar_id,
     })
-    today = dt.date.today()
+    today = heilbronn_today()
     days = set()
     for item in data:
         if item.get("available"):
@@ -108,6 +110,10 @@ def format_german_date(day):
     weekday = GERMAN_WEEKDAYS[date.weekday()]
     month = GERMAN_MONTHS[date.month - 1]
     return f"{weekday}, {date.day}. {month} {date.year}"
+
+
+def heilbronn_today():
+    return dt.datetime.now(HEILBRONN_TZ).date()
 
 
 def send_telegram(message):
@@ -170,7 +176,7 @@ def send_alert(slots, test=False):
 
 
 def send_test_alert():
-    day = (dt.date.today() + dt.timedelta(days=7)).isoformat()
+    day = (heilbronn_today() + dt.timedelta(days=7)).isoformat()
     sample_slots = [
         ("144512|sample|day|09:15", SERVICES[144512][0], "Beispiel", day, "09:15"),
         ("144512|sample|day|10:30", SERVICES[144512][0], "Beispiel", day, "10:30"),
@@ -212,7 +218,7 @@ def check_once():
                 print(f"{label} / {calendar_name}: availability lookup failed: {exc}")
 
     if not new_slots:
-        print(f"{dt.datetime.now().isoformat(timespec='seconds')} — no new slots")
+        print(f"{dt.datetime.now(HEILBRONN_TZ).isoformat(timespec='seconds')} — no new slots")
     else:
         send_alert(new_slots)
         for key, *_rest in new_slots:
