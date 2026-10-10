@@ -127,14 +127,15 @@ def send_telegram(message):
             raise RuntimeError("Telegram rejected the notification")
 
 
-def alert_chunks(slots, test=False):
+def alert_chunks(slots, test=False, current=False):
     grouped = {}
     for key, _label, calendar_name, day, clock in slots:
         service_id = int(key.split("|", 1)[0])
         group_key = (service_id, day, calendar_name)
         grouped.setdefault(group_key, set()).add(clock)
 
-    header = "🔔 Heilbronn Ausländerbehörde\nNeue freie Termine verfügbar\n"
+    subtitle = "Aktuell buchbarer Termin" if current else "Neue freie Termine verfügbar"
+    header = f"🔔 Heilbronn Ausländerbehörde\n{subtitle}\n"
     if test:
         header = "🧪 TEST – Beispiel, keine echten Termine\n" + header
     footer = f"\n📲 Termin buchen: {BOOKING_URL}"
@@ -169,8 +170,8 @@ def alert_chunks(slots, test=False):
     return chunks
 
 
-def send_alert(slots, test=False):
-    for message in alert_chunks(slots, test=test):
+def send_alert(slots, test=False, current=False):
+    for message in alert_chunks(slots, test=test, current=current):
         print(message)
         send_telegram(message)
 
@@ -187,7 +188,7 @@ def send_test_alert():
     send_alert(sample_slots, test=True)
 
 
-def check_once():
+def check_once(force_earliest=False):
     previous = read_state()
     now = time.time()
     current = {}
@@ -206,9 +207,12 @@ def check_once():
                     for clock in times:
                         key = f"{service_id}|{calendar_id}|{day}|{clock}"
                         last_alert = previous.get(key, 0)
-                        if now - last_alert >= REALERT_HOURS * 3600:
+                        if force_earliest or now - last_alert >= REALERT_HOURS * 3600:
                             new_slots.append((key, label, calendar_name, day, clock))
-                            current[key] = now
+                            if not force_earliest:
+                                current[key] = now
+                            elif last_alert:
+                                current[key] = last_alert
                         else:
                             current[key] = last_alert
                     if times:
@@ -217,10 +221,13 @@ def check_once():
             except Exception as exc:
                 print(f"{label} / {calendar_name}: availability lookup failed: {exc}")
 
+    if force_earliest and new_slots:
+        new_slots = [min(new_slots, key=lambda slot: (slot[3], slot[4], slot[0]))]
+
     if not new_slots:
         print(f"{dt.datetime.now(HEILBRONN_TZ).isoformat(timespec='seconds')} — no new slots")
     else:
-        send_alert(new_slots)
+        send_alert(new_slots, current=force_earliest)
         for key, *_rest in new_slots:
             current[key] = now
 
@@ -236,6 +243,7 @@ def main():
     group.add_argument("--daemon", action="store_true", help="check continuously, every 60 seconds by default")
     group.add_argument("--list-services", action="store_true", help="print services visible on the public booking page")
     group.add_argument("--test-alert", action="store_true", help="send a clearly labeled sample Telegram alert")
+    group.add_argument("--send-earliest-current-slot", action="store_true", help="send one currently bookable slot, regardless of alert cooldown")
     args = parser.parse_args()
     if args.list_services:
         list_services()
@@ -243,6 +251,8 @@ def main():
         check_once()
     elif args.test_alert:
         send_test_alert()
+    elif args.send_earliest_current_slot:
+        check_once(force_earliest=True)
     else:
         print(f"Monitoring {len(SERVICES)} services every {INTERVAL}s. Stop with Ctrl+C.")
         while True:
