@@ -7,6 +7,7 @@ import json
 import os
 import random
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -121,10 +122,18 @@ def send_telegram(message):
         raise RuntimeError("Telegram is not configured; set HBN_TG_TOKEN and HBN_TG_CHAT.")
     body = urllib.parse.urlencode({"chat_id": CHAT, "text": message, "disable_web_page_preview": "true"}).encode()
     request = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=body)
-    with urllib.request.urlopen(request, timeout=20) as response:
-        result = json.loads(response.read().decode())
-        if not result.get("ok"):
-            raise RuntimeError("Telegram rejected the notification")
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            result = json.loads(response.read().decode())
+            if not result.get("ok"):
+                raise RuntimeError("Telegram rejected the notification")
+    except urllib.error.HTTPError as exc:
+        try:
+            details = json.loads(exc.read().decode("utf-8", "replace")).get("description", "")
+        except (ValueError, AttributeError):
+            details = ""
+        reason = f": {details}" if details else ""
+        raise RuntimeError(f"Telegram API returned HTTP {exc.code}{reason}") from None
 
 
 def alert_chunks(slots, test=False, current=False):
