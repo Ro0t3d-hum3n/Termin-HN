@@ -112,14 +112,73 @@ def format_german_date(day):
 
 def send_telegram(message):
     if not TOKEN or not CHAT:
-        print("Telegram is not configured; set HBN_TG_TOKEN and HBN_TG_CHAT.")
-        return
+        raise RuntimeError("Telegram is not configured; set HBN_TG_TOKEN and HBN_TG_CHAT.")
     body = urllib.parse.urlencode({"chat_id": CHAT, "text": message, "disable_web_page_preview": "true"}).encode()
     request = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=body)
     with urllib.request.urlopen(request, timeout=20) as response:
         result = json.loads(response.read().decode())
         if not result.get("ok"):
             raise RuntimeError("Telegram rejected the notification")
+
+
+def alert_chunks(slots, test=False):
+    grouped = {}
+    for key, _label, calendar_name, day, clock in slots:
+        service_id = int(key.split("|", 1)[0])
+        group_key = (service_id, day, calendar_name)
+        grouped.setdefault(group_key, set()).add(clock)
+
+    header = "🔔 Heilbronn Ausländerbehörde\nNeue freie Termine verfügbar\n"
+    if test:
+        header = "🧪 TEST – Beispiel, keine echten Termine\n" + header
+    footer = f"\n📲 Termin buchen: {BOOKING_URL}"
+    # Keep each Telegram message below its 4096-character limit. If a
+    # service section continues in another message, repeat its heading.
+    chunks = []
+    chunk = header
+    for service_id, title in ALERT_SECTIONS:
+        entries = [
+            (day, calendar_name, clocks)
+            for (group_service_id, day, calendar_name), clocks in grouped.items()
+            if group_service_id == service_id
+        ]
+        if not entries:
+            continue
+        section_heading = f"\n━━━━━━━━━━━━━━━━━━\n{title}\n"
+        if len(chunk) + len(section_heading) + len(footer) > 3500 and chunk != header:
+            chunks.append(chunk.rstrip() + footer)
+            chunk = header
+        chunk += section_heading
+        for day, calendar_name, clocks in sorted(entries):
+            line = (
+                f"📅 {format_german_date(day)}\n"
+                f"🕘 {', '.join(sorted(clocks))} Uhr · {calendar_name}\n"
+            )
+            if len(chunk) + len(line) + len(footer) > 3500:
+                chunks.append(chunk.rstrip() + footer)
+                chunk = header + f"\n━━━━━━━━━━━━━━━━━━\n{title} (Fortsetzung)\n"
+            chunk += line
+    if chunk != header:
+        chunks.append(chunk.rstrip() + footer)
+    return chunks
+
+
+def send_alert(slots, test=False):
+    for message in alert_chunks(slots, test=test):
+        print(message)
+        send_telegram(message)
+
+
+def send_test_alert():
+    day = (dt.date.today() + dt.timedelta(days=7)).isoformat()
+    sample_slots = [
+        ("144512|sample|day|09:15", SERVICES[144512][0], "Beispiel", day, "09:15"),
+        ("144512|sample|day|10:30", SERVICES[144512][0], "Beispiel", day, "10:30"),
+        ("170652|sample|day|08:45", SERVICES[170652][0], "Beispiel", day, "08:45"),
+        ("170652|sample|day|09:00", SERVICES[170652][0], "Beispiel", day, "09:00"),
+        ("144511|sample|day|11:00", SERVICES[144511][0], "Beispiel", day, "11:00"),
+    ]
+    send_alert(sample_slots, test=True)
 
 
 def check_once():
@@ -155,44 +214,7 @@ def check_once():
     if not new_slots:
         print(f"{dt.datetime.now().isoformat(timespec='seconds')} — no new slots")
     else:
-        grouped = {}
-        for key, _label, calendar_name, day, clock in new_slots:
-            service_id = int(key.split("|", 1)[0])
-            group_key = (service_id, day, calendar_name)
-            grouped.setdefault(group_key, set()).add(clock)
-        header = "🔔 Heilbronn Ausländerbehörde\nNeue freie Termine verfügbar\n"
-        footer = f"\n📲 Termin buchen: {BOOKING_URL}"
-        # Keep each Telegram message below its 4096-character limit. If a
-        # service section continues in another message, repeat its heading.
-        chunks = []
-        chunk = header
-        for service_id, title in ALERT_SECTIONS:
-            entries = [
-                (day, calendar_name, clocks)
-                for (group_service_id, day, calendar_name), clocks in grouped.items()
-                if group_service_id == service_id
-            ]
-            if not entries:
-                continue
-            section_heading = f"\n━━━━━━━━━━━━━━━━━━\n{title}\n"
-            if len(chunk) + len(section_heading) + len(footer) > 3500 and chunk != header:
-                chunks.append(chunk.rstrip() + footer)
-                chunk = header
-            chunk += section_heading
-            for day, calendar_name, clocks in sorted(entries):
-                line = (
-                    f"📅 {format_german_date(day)}\n"
-                    f"🕘 {', '.join(sorted(clocks))} Uhr · {calendar_name}\n"
-                )
-                if len(chunk) + len(line) + len(footer) > 3500:
-                    chunks.append(chunk.rstrip() + footer)
-                    chunk = header + f"\n━━━━━━━━━━━━━━━━━━\n{title} (Fortsetzung)\n"
-                chunk += line
-        if chunk != header:
-            chunks.append(chunk.rstrip() + footer)
-        for message in chunks:
-            print(message)
-            send_telegram(message)
+        send_alert(new_slots)
         for key, *_rest in new_slots:
             current[key] = now
 
@@ -207,11 +229,14 @@ def main():
     group.add_argument("--once", action="store_true", help="check once")
     group.add_argument("--daemon", action="store_true", help="check continuously, every 60 seconds by default")
     group.add_argument("--list-services", action="store_true", help="print services visible on the public booking page")
+    group.add_argument("--test-alert", action="store_true", help="send a clearly labeled sample Telegram alert")
     args = parser.parse_args()
     if args.list_services:
         list_services()
     elif args.once:
         check_once()
+    elif args.test_alert:
+        send_test_alert()
     else:
         print(f"Monitoring {len(SERVICES)} services every {INTERVAL}s. Stop with Ctrl+C.")
         while True:

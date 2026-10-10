@@ -5,6 +5,12 @@ on:
     # GitHub Actions schedules have a five-minute minimum and may be delayed.
     - cron: "*/5 * * * *"
   workflow_dispatch:
+    inputs:
+      test_alert:
+        description: Send a labeled sample alert instead of checking appointments
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: monitor
@@ -32,7 +38,11 @@ jobs:
           key: monitor-state-${{ github.run_id }}
           restore-keys: |
             monitor-state-
+      - name: Send Telegram formatting test
+        if: ${{ inputs.test_alert }}
+        run: python3 heilbronn_monitor.py --test-alert
       - name: Check for slots
+        if: ${{ !inputs.test_alert }}
         run: python3 heilbronn_monitor.py --once
       - name: Save alert state
         if: always()
