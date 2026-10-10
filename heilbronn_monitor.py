@@ -138,12 +138,32 @@ def check_once():
     if not new_slots:
         print(f"{dt.datetime.now().isoformat(timespec='seconds')} — no new slots")
     else:
-        message = "Heilbronn Ausländerbehörde: appointment slot available\n\n" + "\n".join(
-            f"{label}: {day} at {clock} — {calendar_name}"
-            for _key, label, calendar_name, day, clock in new_slots
-        ) + f"\n\nBook here: {BOOKING_URL}"
-        print(message)
-        send_telegram(message)
+        grouped = {}
+        for _key, label, calendar_name, day, clock in new_slots:
+            group_key = (label, calendar_name, day)
+            grouped.setdefault(group_key, set()).add(clock)
+        lines = [
+            f"{label}: {day} at {', '.join(sorted(clocks))} — {calendar_name}"
+            for (label, calendar_name, day), clocks in sorted(grouped.items())
+        ]
+        header = "Heilbronn Ausländerbehörde: appointment slot available\n\n"
+        footer = f"\n\nBook here: {BOOKING_URL}"
+        # Telegram limits a message to 4096 characters. Stay below that limit
+        # and repeat the heading and booking link when a busy first scan needs
+        # more than one notification.
+        chunks = []
+        chunk = header
+        for line in lines:
+            addition = line + "\n"
+            if len(chunk) + len(addition) + len(footer) > 3500 and chunk != header:
+                chunks.append(chunk.rstrip() + footer)
+                chunk = header
+            chunk += addition
+        if chunk != header:
+            chunks.append(chunk.rstrip() + footer)
+        for message in chunks:
+            print(message)
+            send_telegram(message)
         for key, *_rest in new_slots:
             current[key] = now
 
