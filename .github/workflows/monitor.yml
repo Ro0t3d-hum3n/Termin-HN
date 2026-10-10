@@ -13,6 +13,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    environment: termin
     timeout-minutes: 5
     env:
       HBN_LOOKAHEAD: "180"
