@@ -19,6 +19,16 @@ SERVICES = {
     144512: ("Verlängerung Aufenthaltserlaubnis", 20),
     144511: ("Erteilung Aufenthaltserlaubnis", 20),
 }
+ALERT_SECTIONS = (
+    (144512, "🔄 Verlängerung des Aufenthaltstitels"),
+    (170652, "📦 Abholung des Aufenthaltstitels"),
+    (144511, "🆕 Ersterteilung eines Aufenthaltstitels"),
+)
+GERMAN_WEEKDAYS = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+GERMAN_MONTHS = (
+    "Januar", "Februar", "März", "April", "Mai", "Juni",
+    "Juli", "August", "September", "Oktober", "November", "Dezember",
+)
 INTERVAL = max(60, int(os.getenv("HBN_INTERVAL", "60")))
 LOOKAHEAD = int(os.getenv("HBN_LOOKAHEAD", "180"))
 REALERT_HOURS = float(os.getenv("HBN_REALERT_HOURS", "6"))
@@ -93,6 +103,13 @@ def read_state():
         return {}
 
 
+def format_german_date(day):
+    date = dt.date.fromisoformat(day)
+    weekday = GERMAN_WEEKDAYS[date.weekday()]
+    month = GERMAN_MONTHS[date.month - 1]
+    return f"{weekday}, {date.day}. {month} {date.year}"
+
+
 def send_telegram(message):
     if not TOKEN or not CHAT:
         print("Telegram is not configured; set HBN_TG_TOKEN and HBN_TG_CHAT.")
@@ -139,26 +156,38 @@ def check_once():
         print(f"{dt.datetime.now().isoformat(timespec='seconds')} — no new slots")
     else:
         grouped = {}
-        for _key, label, calendar_name, day, clock in new_slots:
-            group_key = (label, calendar_name, day)
+        for key, _label, calendar_name, day, clock in new_slots:
+            service_id = int(key.split("|", 1)[0])
+            group_key = (service_id, day, calendar_name)
             grouped.setdefault(group_key, set()).add(clock)
-        lines = [
-            f"{label}: {day} at {', '.join(sorted(clocks))} — {calendar_name}"
-            for (label, calendar_name, day), clocks in sorted(grouped.items())
-        ]
-        header = "Heilbronn Ausländerbehörde: appointment slot available\n\n"
-        footer = f"\n\nBook here: {BOOKING_URL}"
-        # Telegram limits a message to 4096 characters. Stay below that limit
-        # and repeat the heading and booking link when a busy first scan needs
-        # more than one notification.
+        header = "🔔 Heilbronn Ausländerbehörde\nNeue freie Termine verfügbar\n"
+        footer = f"\n📲 Termin buchen: {BOOKING_URL}"
+        # Keep each Telegram message below its 4096-character limit. If a
+        # service section continues in another message, repeat its heading.
         chunks = []
         chunk = header
-        for line in lines:
-            addition = line + "\n"
-            if len(chunk) + len(addition) + len(footer) > 3500 and chunk != header:
+        for service_id, title in ALERT_SECTIONS:
+            entries = [
+                (day, calendar_name, clocks)
+                for (group_service_id, day, calendar_name), clocks in grouped.items()
+                if group_service_id == service_id
+            ]
+            if not entries:
+                continue
+            section_heading = f"\n━━━━━━━━━━━━━━━━━━\n{title}\n"
+            if len(chunk) + len(section_heading) + len(footer) > 3500 and chunk != header:
                 chunks.append(chunk.rstrip() + footer)
                 chunk = header
-            chunk += addition
+            chunk += section_heading
+            for day, calendar_name, clocks in sorted(entries):
+                line = (
+                    f"📅 {format_german_date(day)}\n"
+                    f"🕘 {', '.join(sorted(clocks))} Uhr · {calendar_name}\n"
+                )
+                if len(chunk) + len(line) + len(footer) > 3500:
+                    chunks.append(chunk.rstrip() + footer)
+                    chunk = header + f"\n━━━━━━━━━━━━━━━━━━\n{title} (Fortsetzung)\n"
+                chunk += line
         if chunk != header:
             chunks.append(chunk.rstrip() + footer)
         for message in chunks:
