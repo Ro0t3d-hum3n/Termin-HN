@@ -61,7 +61,6 @@ Optional settings:
 ```sh
 HBN_INTERVAL=60       # seconds between checks; minimum 60
 HBN_LOOKAHEAD=180     # days ahead to query
-HBN_REALERT_HOURS=6   # repeat an alert if a slot stays available this long
 ```
 
 ## Run on GitHub Actions (no personal server)

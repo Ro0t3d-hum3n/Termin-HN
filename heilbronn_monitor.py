@@ -35,7 +35,6 @@ GERMAN_MONTHS = (
 )
 INTERVAL = max(60, int(os.getenv("HBN_INTERVAL", "60")))
 LOOKAHEAD = int(os.getenv("HBN_LOOKAHEAD", "180"))
-REALERT_HOURS = float(os.getenv("HBN_REALERT_HOURS", "6"))
 TOKEN = os.getenv("HBN_TG_TOKEN", "").strip()
 CHAT = os.getenv("HBN_TG_CHAT", "").strip()
 STATE = Path(os.getenv("HBN_STATE_FILE", Path(__file__).with_name("state.json")))
@@ -220,12 +219,12 @@ def check_once(force_earliest=False):
     now = time.time()
     current = {}
     new_slots = []
+    available_slots = []
     for service_id, (label, _duration) in SERVICES.items():
         try:
             service_calendars = calendars(service_id)
         except Exception as exc:
-            print(f"{label}: calendar lookup failed: {exc}")
-            continue
+            raise RuntimeError(f"{label}: calendar lookup failed: {exc}") from exc
         for calendar_id, calendar_name in service_calendars:
             try:
                 days = open_days(service_id, calendar_id)
@@ -233,33 +232,33 @@ def check_once(force_earliest=False):
                     times = slots_for_day(service_id, calendar_id, day)
                     for clock in times:
                         key = f"{service_id}|{calendar_id}|{day}|{clock}"
-                        last_alert = previous.get(key, 0)
-                        if force_earliest or now - last_alert >= REALERT_HOURS * 3600:
-                            new_slots.append((key, label, calendar_name, day, clock))
-                            if not force_earliest:
-                                current[key] = now
-                            elif last_alert:
-                                current[key] = last_alert
+                        slot = (key, label, calendar_name, day, clock)
+                        available_slots.append(slot)
+                        if key not in previous:
+                            new_slots.append(slot)
+                            current[key] = now
                         else:
-                            current[key] = last_alert
+                            current[key] = previous[key]
                     if times:
                         print(f"{label}: {day} {', '.join(times)} ({calendar_name})")
                 time.sleep(random.uniform(0.3, 0.8))
             except Exception as exc:
-                print(f"{label} / {calendar_name}: availability lookup failed: {exc}")
+                raise RuntimeError(f"{label} / {calendar_name}: availability lookup failed: {exc}") from exc
 
-    if force_earliest and new_slots:
-        new_slots = [min(new_slots, key=lambda slot: (slot[3], slot[4], slot[0]))]
+    if force_earliest:
+        new_slots = [min(available_slots, key=lambda slot: (slot[3], slot[4], slot[0]))] if available_slots else []
 
     if not new_slots:
-        print(f"{dt.datetime.now(HEILBRONN_TZ).isoformat(timespec='seconds')} — no new slots")
+        message = "no currently available slots" if force_earliest else "no newly available slots"
+        print(f"{dt.datetime.now(HEILBRONN_TZ).isoformat(timespec='seconds')} — {message}")
     else:
         send_alert(new_slots, current=force_earliest)
         for key, *_rest in new_slots:
-            current[key] = now
+            if key not in previous:
+                current[key] = now
 
-    # Keep only currently available slots so a slot that disappears and later
-    # returns can alert again. Preserve original alert times for cooldowns.
+    # Only keep slots visible in this successful scan. If a slot disappears and
+    # later returns, its key is new and it will trigger another alert.
     STATE.write_text(json.dumps(current, indent=2) + "\n")
 
 

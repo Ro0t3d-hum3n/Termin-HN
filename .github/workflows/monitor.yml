@@ -28,7 +28,6 @@ jobs:
     timeout-minutes: 5
     env:
       HBN_LOOKAHEAD: "180"
-      HBN_REALERT_HOURS: "3"
       HBN_TG_TOKEN: ${{ secrets.HBN_TG_TOKEN }}
       HBN_TG_CHAT: ${{ secrets.HBN_TG_CHAT }}
     steps:
