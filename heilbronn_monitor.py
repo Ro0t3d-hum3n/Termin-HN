@@ -3,6 +3,7 @@
 
 import argparse
 import datetime as dt
+import html
 import json
 import os
 import random
@@ -120,7 +121,14 @@ def heilbronn_today():
 def send_telegram(message):
     if not TOKEN or not CHAT:
         raise RuntimeError("Telegram is not configured; set HBN_TG_TOKEN and HBN_TG_CHAT.")
-    body = urllib.parse.urlencode({"chat_id": CHAT, "text": message, "disable_web_page_preview": "true"}).encode()
+    reply_markup = {"inline_keyboard": [[{"text": "📅 Jetzt Termin buchen", "url": BOOKING_URL}]]}
+    body = urllib.parse.urlencode({
+        "chat_id": CHAT,
+        "text": message,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": "true",
+        "reply_markup": json.dumps(reply_markup, ensure_ascii=False),
+    }).encode()
     request = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/sendMessage", data=body)
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
@@ -143,37 +151,47 @@ def alert_chunks(slots, test=False, current=False):
         group_key = (service_id, day, calendar_name)
         grouped.setdefault(group_key, set()).add(clock)
 
-    subtitle = "Aktuell buchbarer Termin" if current else "Neue freie Termine verfügbar"
-    header = f"🔔 Heilbronn Ausländerbehörde\n{subtitle}\n"
+    subtitle = "Jetzt buchbare Termine" if current else "Neue freie Termine gefunden"
+    header = f"🔔 <b>Heilbronn · Ausländerbehörde</b>\n<i>{subtitle}</i>\n"
     if test:
-        header = "🧪 TEST – Beispiel, keine echten Termine\n" + header
-    footer = f"\n📲 Termin buchen: {BOOKING_URL}"
-    # Keep each Telegram message below its 4096-character limit. If a
-    # service section continues in another message, repeat its heading.
+        header = "🧪 <b>TEST · Beispieltermine, nicht echt</b>\n" + header
+    footer = f"\n\n<i>Stand: {dt.datetime.now(HEILBRONN_TZ).strftime('%H:%M')} Uhr</i>"
+    # Arrange calendars under a single date heading. This avoids repeating
+    # the same date for every room/calendar while keeping each calendar distinct.
     chunks = []
     chunk = header
     for service_id, title in ALERT_SECTIONS:
-        entries = [
-            (day, calendar_name, clocks)
-            for (group_service_id, day, calendar_name), clocks in grouped.items()
-            if group_service_id == service_id
-        ]
-        if not entries:
+        days = sorted({day for (sid, day, _calendar) in grouped if sid == service_id})
+        if not days:
             continue
-        section_heading = f"\n━━━━━━━━━━━━━━━━━━\n{title}\n"
-        if len(chunk) + len(section_heading) + len(footer) > 3500 and chunk != header:
+        service_heading = f"\n━━━━━━━━━━━━━━━━━━\n<b>{html.escape(title)}</b>\n"
+        if len(chunk) + len(service_heading) + len(footer) > 3500 and chunk != header:
             chunks.append(chunk.rstrip() + footer)
             chunk = header
-        chunk += section_heading
-        for day, calendar_name, clocks in sorted(entries):
-            line = (
-                f"📅 {format_german_date(day)}\n"
-                f"🕘 {', '.join(sorted(clocks))} Uhr · {calendar_name}\n"
-            )
-            if len(chunk) + len(line) + len(footer) > 3500:
+        chunk += service_heading
+        for day_index, day in enumerate(days):
+            date = dt.date.fromisoformat(day)
+            full_date = format_german_date(day)
+            separator = "\n──────────────\n" if day_index else "\n"
+            date_heading = f"{separator}📅 <b>{full_date}</b>\n"
+            if len(chunk) + len(date_heading) + len(footer) > 3500:
                 chunks.append(chunk.rstrip() + footer)
-                chunk = header + f"\n━━━━━━━━━━━━━━━━━━\n{title} (Fortsetzung)\n"
-            chunk += line
+                chunk = header + service_heading
+            chunk += date_heading
+            calendar_entries = sorted(
+                (calendar_name, sorted(clocks))
+                for (sid, entry_day, calendar_name), clocks in grouped.items()
+                if sid == service_id and entry_day == day
+            )
+            for calendar_name, clocks in calendar_entries:
+                label = html.escape(calendar_name)
+                time_lines = [" · ".join(clocks[index:index + 6]) for index in range(0, len(clocks), 6)]
+                times = "\n".join(f"<code>{line}</code>" for line in time_lines)
+                line = f"• <b>{label}</b> · {len(clocks)} Zeitfenster\n{times}\n\n"
+                if len(chunk) + len(line) + len(footer) > 3500:
+                    chunks.append(chunk.rstrip() + footer)
+                    chunk = header + service_heading + date_heading
+                chunk += line
     if chunk != header:
         chunks.append(chunk.rstrip() + footer)
     return chunks
